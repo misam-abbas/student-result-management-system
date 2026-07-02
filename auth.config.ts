@@ -1,4 +1,5 @@
 import type { NextAuthConfig } from "next-auth";
+import type { Role } from "@prisma/client";
 import {
   ADMIN_LOGIN_PATH,
   ADMIN_PROTECTED_PREFIX,
@@ -11,6 +12,13 @@ import {
  * it is loaded by middleware.ts, which runs on the Edge runtime. The
  * Credentials provider (which does need Prisma/bcrypt) is added on top of
  * this config in auth.ts, which only runs in the Node.js runtime.
+ *
+ * The `jwt`/`session` callbacks below copy `role` onto the token/session.
+ * They must live HERE (not only in auth.ts) because middleware.ts builds
+ * its own separate NextAuth instance from just this config — if these
+ * callbacks aren't shared, middleware can decode a valid session cookie
+ * but never see `role` on it, and will redirect every request back to
+ * login even immediately after a successful sign-in.
  */
 export const authConfig = {
   pages: {
@@ -46,6 +54,23 @@ export const authConfig = {
       }
 
       return true;
+    },
+    async jwt({ token, user }) {
+      if (user) {
+        const authorizedUser = user as { id: string; name?: string | null; role: Role };
+        token.role = authorizedUser.role;
+        token.username = authorizedUser.name ?? undefined;
+      }
+      return token;
+    },
+    async session({ session, token }) {
+      if (session.user) {
+        const t = token as { sub?: string; role?: Role; username?: string };
+        session.user.id = t.sub ?? "";
+        session.user.role = t.role ?? "ADMIN";
+        session.user.name = t.username ?? session.user.name;
+      }
+      return session;
     },
   },
 } satisfies NextAuthConfig;

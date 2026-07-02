@@ -1,4 +1,4 @@
-import type { Department, Marks, ResultStatus, Semester, Student, Subject } from "@prisma/client";
+import type { Department, Marks, Result, ResultStatus, Semester, Subject } from "@prisma/client";
 
 /** A single subject's marks, as entered/displayed in forms and results. */
 export interface MarkEntry {
@@ -9,10 +9,20 @@ export interface MarkEntry {
 }
 
 /** A student together with the relations the UI needs to render. */
-export interface StudentWithRelations extends Student {
+export interface StudentWithRelations {
+  id: string;
+  name: string;
+  fatherName: string;
+  rollNumber: string;
+  cnic: string;
+  departmentId: string;
+  semesterId: string;
+  createdAt: Date | string;
+  updatedAt: Date | string;
   department: Department;
   semester: Semester;
-  marks: (Marks & { subject: Subject })[];
+  result: Result | null;
+  marks?: (Marks & { subject: Subject })[];
 }
 
 /** The computed result view shown on the student lookup page and in the PDF. */

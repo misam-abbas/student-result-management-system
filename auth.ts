@@ -1,43 +1,62 @@
-import NextAuth from "next-auth";
-import Credentials from "next-auth/providers/credentials";
+import type { NextAuthConfig } from "next-auth";
 import type { Role } from "@prisma/client";
-import { authConfig } from "./auth.config";
-import { verifyCredentials } from "@/lib/auth/credentials";
-import { loginSchema } from "@/lib/validations";
+import {
+  ADMIN_LOGIN_PATH,
+  ADMIN_PROTECTED_PREFIX,
+  HOD_LOGIN_PATH,
+  HOD_PROTECTED_PREFIX,
+} from "@/constants/routes";
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
-  ...authConfig,
-  providers: [
-    Credentials({
-      credentials: {
-        username: { label: "Username", type: "text" },
-        password: { label: "Password", type: "password" },
-        role: { label: "Role", type: "text" },
-      },
-      async authorize(credentials) {
-        const parsed = loginSchema.safeParse(credentials);
-        if (!parsed.success) return null;
-
-        const { username, password, role } = parsed.data;
-        const user = await verifyCredentials(username, password, role);
-        if (!user) return null;
-
-        return {
-          id: user.id,
-          name: user.username,
-          role: user.role,
-        };
-      },
-    }),
-  ],
+/**
+ * Edge-safe configuration. This file must NEVER import Prisma or bcrypt —
+ * it is loaded by middleware.ts, which runs on the Edge runtime. The
+ * Credentials provider (which does need Prisma/bcrypt) is added on top of
+ * this config in auth.ts, which only runs in the Node.js runtime.
+ *
+ * The `jwt`/`session` callbacks below copy `role` onto the token/session.
+ * They must live HERE (not only in auth.ts) because middleware.ts builds
+ * its own separate NextAuth instance from just this config — if these
+ * callbacks aren't shared, middleware can decode a valid session cookie
+ * but never see `role` on it, and will redirect every request back to
+ * login even immediately after a successful sign-in.
+ */
+export const authConfig = {
+  pages: {
+    signIn: ADMIN_LOGIN_PATH,
+  },
+  session: {
+    strategy: "jwt",
+  },
+  providers: [],
   callbacks: {
-    ...authConfig.callbacks,
+    authorized({ auth, request: { nextUrl } }) {
+      const isLoggedIn = !!auth?.user;
+      const role = auth?.user?.role;
+      const { pathname } = nextUrl;
+
+      const isAdminRoute =
+        pathname.startsWith(ADMIN_PROTECTED_PREFIX) && !pathname.startsWith(ADMIN_LOGIN_PATH);
+      const isHodRoute =
+        pathname.startsWith(HOD_PROTECTED_PREFIX) && !pathname.startsWith(HOD_LOGIN_PATH);
+
+      if (isAdminRoute) {
+        if (!isLoggedIn || role !== "ADMIN") {
+          return Response.redirect(new URL(ADMIN_LOGIN_PATH, nextUrl));
+        }
+        return true;
+      }
+
+      if (isHodRoute) {
+        if (!isLoggedIn || role !== "HOD") {
+          return Response.redirect(new URL(HOD_LOGIN_PATH, nextUrl));
+        }
+        return true;
+      }
+
+      return true;
+    },
     async jwt({ token, user }) {
       if (user) {
-        // NextAuth v5's ambient User/AdapterUser union doesn't reliably
-        // carry our module-augmented `role` field through this callback's
-        // inferred type, so we assert the shape we know authorize() above
-        // actually returns rather than fighting the library's generics.
         const authorizedUser = user as { id: string; name?: string | null; role: Role };
         token.role = authorizedUser.role;
         token.username = authorizedUser.name ?? undefined;
@@ -54,4 +73,4 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       return session;
     },
   },
-});
+} satisfies NextAuthConfig;

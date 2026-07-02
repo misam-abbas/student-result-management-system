@@ -1,0 +1,192 @@
+// ============================================================================
+// Student Result Management System — Prisma Schema
+// ============================================================================
+// Run `npx prisma generate` after install to create the typed client.
+// Run `npx prisma migrate dev --name init` to create your first migration.
+// Docs: https://pris.ly/d/prisma-schema
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Pooled connection — used by the app at runtime (PgBouncer / Neon pooled port).
+  url       = env("DATABASE_URL")
+  // Direct (unpooled) connection — used only by Prisma Migrate for schema changes.
+  directUrl = env("DIRECT_URL")
+}
+
+// ----------------------------------------------------------------------------
+// Enums
+// ----------------------------------------------------------------------------
+
+enum Role {
+  ADMIN
+  HOD
+}
+
+enum ResultStatus {
+  PASS
+  FAIL
+}
+
+// ----------------------------------------------------------------------------
+// User — Admin and HOD accounts. Students never get a User row; they
+// authenticate a result lookup with CNIC + Roll Number instead (see Student).
+// ----------------------------------------------------------------------------
+
+model User {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  password  String // bcrypt hash, never the plaintext password
+  role      Role
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([role])
+  @@map("users")
+}
+
+// ----------------------------------------------------------------------------
+// Department — e.g. Computer Science, Electrical Engineering
+// ----------------------------------------------------------------------------
+
+model Department {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  code      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  students Student[]
+
+  @@map("departments")
+}
+
+// ----------------------------------------------------------------------------
+// Semester — e.g. Semester 1 .. Semester 8. Subjects belong to a semester;
+// a student is enrolled in exactly one semester at a time.
+// ----------------------------------------------------------------------------
+
+model Semester {
+  id     String @id @default(uuid())
+  number Int    @unique // 1-8
+  label  String // "Semester 1"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  students Student[]
+  subjects Subject[]
+
+  @@map("semesters")
+}
+
+// ----------------------------------------------------------------------------
+// Subject — belongs to a semester. totalMarks is the default total for the
+// subject; Marks.totalMarks stores a per-entry snapshot so historic results
+// stay accurate even if a subject's total marks are edited later.
+// ----------------------------------------------------------------------------
+
+model Subject {
+  id         String @id @default(uuid())
+  name       String
+  code       String?
+  totalMarks Int    @default(100)
+
+  semesterId String
+  semester   Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  marks Marks[]
+
+  @@unique([semesterId, name])
+  @@index([semesterId])
+  @@map("subjects")
+}
+
+// ----------------------------------------------------------------------------
+// Student — the core record. CNIC + Roll Number together are how a student
+// looks up their own result (no login).
+// ----------------------------------------------------------------------------
+
+model Student {
+  id         String @id @default(uuid())
+  name       String
+  fatherName String
+  rollNumber String @unique
+  cnic       String @unique // format: xxxxx-xxxxxxx-x
+
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id])
+
+  semesterId String
+  semester   Semester @relation(fields: [semesterId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  marks  Marks[]
+  result Result?
+
+  @@index([departmentId])
+  @@index([semesterId])
+  @@index([cnic, rollNumber])
+  @@map("students")
+}
+
+// ----------------------------------------------------------------------------
+// Marks — one row per (student, subject). totalMarks is snapshotted at the
+// time marks are entered.
+// ----------------------------------------------------------------------------
+
+model Marks {
+  id String @id @default(uuid())
+
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  subjectId String
+  subject   Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  obtainedMarks Float
+  totalMarks    Float
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([studentId, subjectId])
+  @@index([studentId])
+  @@index([subjectId])
+  @@map("marks")
+}
+
+// ----------------------------------------------------------------------------
+// Result — a precomputed summary (total/obtained/percentage/GPA/status) kept
+// in sync whenever a student's marks are created or updated. Reading a
+// result is then a single fast lookup instead of summing Marks every time.
+// ----------------------------------------------------------------------------
+
+model Result {
+  id String @id @default(uuid())
+
+  studentId String  @unique
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  totalMarks    Float
+  obtainedMarks Float
+  percentage    Float
+  gpa           Float
+  status        ResultStatus
+
+  generatedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status])
+  @@index([percentage])
+  @@map("results")
+}
